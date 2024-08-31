@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "smua"
+version = "0.1.0"
+description = ""
+authors = ["Thomas Rambø <thms.rmb@gmail.com>"]
+readme = "README.md"
+packages = [{include = "smua"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+werkzeug = "^3.0.3"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
