@@ -1,5 +1,11 @@
 import typing as t
 
+import boto3.s3.constants
+from boto3.s3.transfer import TransferConfig, S3Transfer
+from botocore.session import get_session
+from boto3.s3.constants import CLASSIC_TRANSFER_CLIENT
+from s3transfer.futures import NonThreadedExecutor
+from s3transfer.manager import TransferManager
 from werkzeug import Request
 from werkzeug.datastructures import MultiDict, FileStorage
 from werkzeug.formparser import FormDataParser, MultiPartParser
@@ -8,12 +14,45 @@ from werkzeug.sansio.multipart import MultipartDecoder, Epilogue, NeedData, Data
 from werkzeug.wsgi import get_content_length, get_input_stream
 
 
+class DecodedStreamTransferManager(TransferManager):
+
+    def _get_future_with_components(self, call_args):
+        size = None
+        if hasattr(call_args, "fileobj"):
+            fileobj = call_args.fileobj
+            if isinstance(fileobj, DecodedStream):
+                size = fileobj.content_length
+
+        transfer_future, components = super()._get_future_with_components(call_args)
+
+        if size is not None:
+            meta = components.get("meta")
+            if meta is not None:
+                meta.provide_transfer_size(size)
+
+        return transfer_future, components
+
+
+def create_transfer_manager(client, config):
+    return DecodedStreamTransferManager(client, config, executor_cls=NonThreadedExecutor)
+
+
 def handle_file_upload(readable):
-    while True:
-        b = readable.read(100)
-        if not b:
-            break
-        print(f"Got bytes: {b}")
+    region = "eu-west-1"
+    session = get_session()
+    client = session.create_client("s3", region_name=region)
+    transfer_config = TransferConfig(
+        max_concurrency=1,
+        use_threads=False,
+        preferred_transfer_client=CLASSIC_TRANSFER_CLIENT,
+    )
+
+    with create_transfer_manager(client, transfer_config) as manager:
+        transfer = manager.upload(readable, "tind-dev-cicero", "thomas-test/123")
+
+        result = transfer.result()
+
+    return result
 
 
 class DecodedStream:
@@ -70,6 +109,10 @@ class DecodedStream:
                 content_length = event.headers.get("Content-Length")
                 if content_length is None:
                     raise ValueError("Content-Length of file is required.")
+                try:
+                    content_length = int(content_length)
+                except ValueError:
+                    raise ValueError("Content-Length of file must be an integer.")
                 self._content_length = content_length
             elif isinstance(event, Data):
                 self.buffer += event.data
@@ -116,7 +159,7 @@ def convert_environ_into_stream(environ) -> t.IO[bytes]:
 
 def application(environ, start_response):
     decoded_stream = convert_environ_into_stream(environ)
-    handle_file_upload(decoded_stream)
+    result = handle_file_upload(decoded_stream)
     start_response("200 OK", [("Content-Type", "text/plain")])
     return ["Hello World!".encode("utf-8")]
 
