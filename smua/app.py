@@ -1,3 +1,4 @@
+import hashlib
 import typing as t
 
 import boto3.s3.constants
@@ -125,6 +126,39 @@ class DecodedStream:
         return self.content_length
 
 
+class Md5HashReader:
+    """
+    Obtains an md5 checksum while reading a file.
+
+    It basically wraps the calls to `.read()` and fills data into the hash
+    object.
+    """
+
+    def __init__(self, decoded_stream):
+        self.decoded_stream = decoded_stream
+        self.hash_obj = hashlib.md5()
+
+    def read(self, size: int) -> bytes:
+        val = self.decoded_stream.read(size)
+        self.hash_obj.update(val)
+
+        return val
+
+    def seekable(self):
+        return self.decoded_stream.seekable()
+
+    def seek(self, *args, **kwargs):
+        return self.decoded_stream.seek(*args, **kwargs)
+
+    @property
+    def content_length(self):
+        return self.decoded_stream.content_length
+
+    def __sizeof__(self):
+        return len(self.decoded_stream)
+
+
+
 def convert_environ_into_stream(environ) -> t.IO[bytes]:
     """
     Parses an environ into a stream.
@@ -159,9 +193,10 @@ def convert_environ_into_stream(environ) -> t.IO[bytes]:
 
 def application(environ, start_response):
     decoded_stream = convert_environ_into_stream(environ)
-    result = handle_file_upload(decoded_stream)
+    md5_hash_reader = Md5HashReader(decoded_stream)
+    result = handle_file_upload(md5_hash_reader)
     start_response("200 OK", [("Content-Type", "text/plain")])
-    return ["Hello World!".encode("utf-8")]
+    return [f"File upload success! The checksum is {md5_hash_reader.hash_obj.hexdigest()}\n".encode("utf-8")]
 
 if __name__ == "__main__":
     from werkzeug.serving import run_simple
